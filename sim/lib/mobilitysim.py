@@ -1,7 +1,5 @@
 from collections import namedtuple, defaultdict
-import itertools
 import random as rd
-import pandas as pd
 import numpy as np
 import numba
 import pickle

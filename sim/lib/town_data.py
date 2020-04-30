@@ -1,13 +1,10 @@
 import numpy as np
-import matplotlib.pyplot as plt
 import pandas as pd
-import os
-import json
 import geopy.distance
 import requests
 
 # tile levels and corresponding width (degrees of longitudes)
-# from OpenStreetMaps (https://wiki.openstreetmap.org/wiki/Zoom_levels) 
+# from OpenStreetMaps (https://wiki.openstreetmap.org/wiki/Zoom_levels)
 tile_level_dict = {
     0: 360,
     1: 180,
@@ -33,7 +30,7 @@ tile_level_dict = {
 }
 
 def generate_population(bbox, population_per_age_group, density_files=None, tile_level=16, seed=None, density_site_loc=None):
-    
+
     # raise error if tile level is invalid
     assert (type(tile_level)==int and tile_level>=0 and tile_level<=20), 'Invalid tile level'
 
@@ -42,11 +39,11 @@ def generate_population(bbox, population_per_age_group, density_files=None, tile
         np.random.seed(seed=seed)
 
     # tile size in degrees
-    tile_size = tile_level_dict[tile_level] 
+    tile_size = tile_level_dict[tile_level]
 
     # total population
     population = sum(population_per_age_group)
-    
+
     if density_files is not None:
 
         tiles=pd.DataFrame()
@@ -57,7 +54,7 @@ def generate_population(bbox, population_per_age_group, density_files=None, tile
 
         tiles = tiles.rename(columns={"Baseline: People": "pop"})
         tiles = tiles.dropna(axis=0, how='any')
-        
+
         # average over all days
         tiles = tiles.groupby(['lat','lon'], as_index=False).mean()
 
@@ -76,18 +73,18 @@ def generate_population(bbox, population_per_age_group, density_files=None, tile
         lon_arr = np.arange(bbox[2]+tile_size/2, bbox[3]-tile_size/2, tile_size)
         num_of_tiles = len(lat_arr)*len(lon_arr)
 
-        # set probabilities proportional to density 
+        # set probabilities proportional to density
         density_prob = num_of_tiles*[1/num_of_tiles]
-        # generate population equally distributed accross all tiles 
+        # generate population equally distributed accross all tiles
         population_distribution = np.random.multinomial(population, density_prob, size=1)[0]
-        
+
         tiles=pd.DataFrame()
         tile_ind=0
         for lat in lat_arr:
             for lon in lon_arr:
                 tiles = tiles.append(pd.DataFrame(data={'lat': [lat], 'lon': [lon], 'pop': [population_distribution[tile_ind]]}))
                 tile_ind += 1
-        
+
     elif density_files is None and density_site_loc is not None:
 
         # generate a grid of tiles inside the bounding box
@@ -97,9 +94,9 @@ def generate_population(bbox, population_per_age_group, density_files=None, tile
 
         num_critical_sites = len(density_site_loc)
 
-        # set probabilities proportional to density 
+        # set probabilities proportional to density
         density_prob = num_of_tiles*[0]
-        
+
         tiles=pd.DataFrame()
         tile_ind=0
         for lat in lat_arr:
@@ -110,9 +107,9 @@ def generate_population(bbox, population_per_age_group, density_files=None, tile
                         num_critical_sites_in_tile += 1
                 density_prob[tile_ind] = num_critical_sites_in_tile/num_critical_sites
                 tile_ind += 1
-        
 
-        # generate population proportional to the critical sites per tile (e.g. bus stops) 
+
+        # generate population proportional to the critical sites per tile (e.g. bus stops)
         population_distribution = np.random.multinomial(population, density_prob, size=1)[0]
 
         tile_ind=0
@@ -120,7 +117,7 @@ def generate_population(bbox, population_per_age_group, density_files=None, tile
             for lon in lon_arr:
                 tiles = tiles.append(pd.DataFrame(data={'lat': [lat], 'lon': [lon], 'pop': [population_distribution[tile_ind]]}))
                 tile_ind += 1
-    
+
     # discard tiles with zero population
     tiles = tiles[tiles['pop']!=0]
 
@@ -150,7 +147,7 @@ def generate_population(bbox, population_per_age_group, density_files=None, tile
         # age group assigned proportionally to the real statistics
         people_age+=list(np.random.multinomial(n=1, pvals=age_proportions, size=pop).argmax(axis=1))
         i_tile+=1
-    
+
     return home_loc, people_age, home_tile, tile_loc
 
 def overpass_query(bbox, contents):
@@ -162,7 +159,7 @@ def overpass_query(bbox, contents):
     return query
 
 def generate_sites(bbox, query_files, site_based_density_file=None):
-    
+
     overpass_url = "http://overpass-api.de/api/interpreter"
     site_loc=[]
     site_type=[]
@@ -183,7 +180,7 @@ def generate_sites(bbox, query_files, site_based_density_file=None):
             contents = q.readlines()
             contents = [c for c in contents if c!='']
 
-            # generate and call overpass queries 
+            # generate and call overpass queries
             response = requests.get(overpass_url, params={'data': overpass_query(bbox, contents)})
             if response.status_code == 200:
                 print('Query ' + str(q_ind+1) + ' OK.')
@@ -200,7 +197,7 @@ def generate_sites(bbox, query_files, site_based_density_file=None):
                     ways.append([site['center']['lat'], site['center']['lon']])
                 elif site['type']=='node':
                     nodes.append([site['lat'], site['lon']])
-            
+
             # if there are ways in the query results discard all nodes
             if ways==[] and nodes!=[]:
                 locs_to_add = nodes
@@ -208,21 +205,21 @@ def generate_sites(bbox, query_files, site_based_density_file=None):
             elif ways!=[]:
                 locs_to_add = ways
                 site_type += len(ways)*[type_ind]
-            
+
             site_loc += locs_to_add
-            
+
             type_ind+=1
-            
+
     # locations of this type are used to generate population density
     if site_based_density_file is not None:
-        
+
         with open(site_based_density_file, 'r') as q:
-            
+
             # read all query parameters
             contents = q.readlines()
             contents = [c for c in contents if c!='']
 
-            # generate and call overpass queries 
+            # generate and call overpass queries
             response = requests.get(overpass_url, params={'data': overpass_query(bbox, contents)})
             if response.status_code == 200:
                 print('Query ' + str(len(query_files)+1) + ' OK.')
@@ -230,7 +227,7 @@ def generate_sites(bbox, query_files, site_based_density_file=None):
                 print('Query ' + str(len(query_files)+1) + ' returned http code ' + str(response.status_code) + '. Try again.')
                 return None, None, None, None
             data = response.json()
-            
+
             # read sites latitude and longitude
             density_site_loc=[]
             for site in data['elements']:
@@ -238,15 +235,15 @@ def generate_sites(bbox, query_files, site_based_density_file=None):
                     density_site_loc.append([site['center']['lat'], site['center']['lon']])
                 elif site['type']=='node':
                     density_site_loc.append([site['lat'], site['lon']])
-            
+
 
     return site_loc, site_type, site_dict, density_site_loc
 
 def compute_distances(site_loc, tile_loc):
-    
+
     # 2D array containing pairwise distances
     tile_site_dist=np.zeros((len(tile_loc), len(site_loc)))
-    
+
     for i_tile, tile in enumerate(tile_loc):
         for i_site, site in enumerate(site_loc):
             tile_site_dist[i_tile,i_site]=geopy.distance.distance(tile,site).km
