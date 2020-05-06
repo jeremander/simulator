@@ -101,11 +101,55 @@ class SocialDistancingForAllMeasure(Measure):
             return self.p_stay_home
         return 0.0
 
-class SocialDistancingForPositiveMeasure(SocialDistancingForAllMeasure):
+class SocialDistancingPerStateMeasure(SocialDistancingForAllMeasure):
     """
-    Social distancing measure. Only the population of positive cases is advised
+    Social distancing measure. Only the population in a given 'state' is advised
     to stay home. Each visit of each individual respects the measure with some
     probability.
+
+    NOTE: This is the same as a SocialDistancingForAllMeasure but `is_contained` query also checks that the state 'state' 
+    of individual j is True
+    """
+
+    def __init__(self, t_window, p_stay_home, state_label):
+        # Init time window
+        super().__init__(t_window, p_stay_home)
+        
+        self.state_label = state_label
+        
+    @enforce_init_run
+    def is_contained(self, *, j, j_visit_id, t, state_dict):
+        """Indicate if individual `j` is in state 'state' and respects measure for
+        visit `j_visit_id`
+
+        r : int
+            Id of realization
+        j : int
+            Id of individual
+        j_visit_id : int
+            Id of visit
+        t : float
+            Query time
+        state_dict : dict
+            Dict with states of all individuals in `DiseaseModel`
+        """
+        is_home_now = self.bernoulli_stay_home[j, j_visit_id]
+        # only isolate at home while at state `state`
+        return is_home_now and state_dict[state_label][j] and self._in_window(t)
+    
+    @enforce_init_run
+    def is_contained_prob(self, *, j, t, state_started_at_dict, state_ended_at_dict):
+        """Returns probability of containment for individual `j` at time `t`
+        """
+        if (self._in_window(t) and t >= state_started_at_dict[state_label][j] and t<=state_ended_at_dict[state_label][j]):
+            return self.p_stay_home
+        return 0.0
+
+class SocialDistancingForPositiveMeasure(SocialDistancingForAllMeasure):
+    """
+    Social distancing measure. Only the population of positive cases who are not
+    resistant or dead is advised to stay home. Each visit of each individual 
+    respects the measure with some probability.
 
     NOTE: This is the same as a SocialDistancingForAllMeasure but `is_contained` query also checks that the state 'posi' of individual j is True
     """
@@ -143,6 +187,49 @@ class SocialDistancingForPositiveMeasure(SocialDistancingForAllMeasure):
             return self.p_stay_home
         return 0.0
 
+class SocialDistancingForPositiveMeasureHousehold(Measure):
+    """
+    Social distancing measure. Isolate positive cases from household members. 
+    Each individual respects the measure with some probability.
+    """
+
+    def __init__(self, t_window, p_isolate):
+        """
+
+        Parameters
+        ----------
+        t_window : Interval
+            Time window during which the measure is active
+        p_isolate : float
+            Probability of respecting the measure, should be in [0,1]
+        """
+        # Init time window
+        super().__init__(t_window)
+        self.p_isolate = p_isolate
+        
+    def init_run(self):
+        """Init the measure for this run is trivial
+        """
+        self._is_init = True
+        
+    @enforce_init_run
+    def is_contained(self, *, j, t, state_posi, state_resi, state_dead):
+        """Indicate if individual `j` respects measure 
+        """
+        is_isolated = np.random.binomial(1, self.p_isolate)
+        is_posi = (state_posi[j] and (not state_resi[j])) and (not state_dead[j])
+        return is_isolated and is_posi and self._in_window(t)
+
+    @enforce_init_run
+    def is_contained_prob(self, *, j, t, state_posi_started_at, state_posi_ended_at, state_resi_started_at, state_dead_started_at):
+        """Returns probability of containment for individual `j` at time `t`
+        """
+        if (self._in_window(t) and 
+            t >= state_posi_started_at[j] and t<=state_posi_ended_at[j] and 
+            t < state_resi_started_at[j] and t < state_dead_started_at[j]):
+            return p_isolate
+        return 0.0
+            
 class SocialDistancingByAgeMeasure(Measure):
     """
     Social distancing measure. The population is advised to stay at home based
@@ -315,13 +402,10 @@ class SocialDistancingForKGroups(Measure):
             return 1.0
         return 0.0
 
-
-
 """
 =========================== SITE SPECIFIC MEASURES ===========================
 """
 
-# DEPRECATED since we assume that betas are constant for types
 class BetaMultiplierMeasure(Measure):
 
     def __init__(self, t_window, beta_multiplier):
@@ -336,11 +420,15 @@ class BetaMultiplierMeasure(Measure):
         """
 
         super().__init__(t_window)
-        if (not isinstance(beta_multiplier, list)
-            or (min(beta_multiplier) < 0)):
-            raise ValueError(("`beta_multiplier` should be list of"
+        if (not isinstance(beta_multiplier, dict)
+                or (min(beta_multiplier.values()) < 0)):
+            raise ValueError(("`beta_multiplier` should be dict of"
                               " non-negative floats"))
-        self.beta_multiplier = beta_multiplier
+        self.beta_multiplier = defaultdict(lambda: 1.0, beta_multiplier)
+
+
+# DEPRECATED since we assume that betas are constant for types
+class BetaMultiplierMeasureBySite(BetaMultiplierMeasure):
 
     def beta_factor(self, *, k, t):
         """Returns the multiplicative factor for site `k` at time `t`. The
@@ -527,7 +615,7 @@ if __name__ == "__main__":
     assert m.is_contained(j=0, j_visit_id=0, t=1.0, state_posi=state_posi, state_resi=state_resi, state_dead=state_dead) == False
 
     # Text BetaMultiplierMeasure
-    m = BetaMultiplierMeasure(t_window=Interval(1.0, 2.0), beta_multiplier=[2.0, 0.0])
+    m = BetaMultiplierMeasureBySite(t_window=Interval(1.0, 2.0), beta_multiplier={0: 2.0, 1: 0.0})
     assert m.beta_factor(k=0, t=0.9) == 1.0
     assert m.beta_factor(k=0, t=1.0) == 2.0
     assert m.beta_factor(k=1, t=0.9) == 1.0
@@ -535,17 +623,17 @@ if __name__ == "__main__":
 
     # Test MeasureList
     list_of_measures = [
-        BetaMultiplierMeasure(t_window=Interval(1.0, 2.0), beta_multiplier=[2.0, 0.0]),
-        BetaMultiplierMeasure(t_window=Interval(2.0, 5.0), beta_multiplier=[2.0, 0.0]),
-        BetaMultiplierMeasure(t_window=Interval(8.0, 10.0), beta_multiplier=[2.0, 0.0]),
+        BetaMultiplierMeasureBySite(t_window=Interval(1.0, 2.0), beta_multiplier={0: 2.0, 1: 0.0}),
+        BetaMultiplierMeasureBySite(t_window=Interval(2.0, 5.0), beta_multiplier={0: 2.0, 1: 0.0}),
+        BetaMultiplierMeasureBySite(t_window=Interval(8.0, 10.0), beta_multiplier={0: 2.0, 1: 0.0}),
         SocialDistancingForPositiveMeasure(t_window=Interval(1.0, 2.0), p_stay_home=1.0),
         SocialDistancingForPositiveMeasure(t_window=Interval(2.0, 5.0), p_stay_home=1.0),
         SocialDistancingForPositiveMeasure(t_window=Interval(6.0, 10.0), p_stay_home=1.0),
     ]
     obj = MeasureList(list_of_measures)
     obj.init_run(SocialDistancingForPositiveMeasure, n_people=2, n_visits=10)
-    assert obj.find(BetaMultiplierMeasure, t=1.0) == list_of_measures[0]
-    assert obj.find(BetaMultiplierMeasure, t=2.0) == list_of_measures[1]
-    assert obj.find(BetaMultiplierMeasure, t=5.0) == None
+    assert obj.find(BetaMultiplierMeasureBySite, t=1.0) == list_of_measures[0]
+    assert obj.find(BetaMultiplierMeasureBySite, t=2.0) == list_of_measures[1]
+    assert obj.find(BetaMultiplierMeasureBySite, t=5.0) == None
     assert obj.find(SocialDistancingForPositiveMeasure, t=5.0) == None
     assert obj.find(SocialDistancingForPositiveMeasure, t=6.0) == list_of_measures[-1]
