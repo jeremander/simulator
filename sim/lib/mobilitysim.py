@@ -313,7 +313,7 @@ class MobilitySimulator:
         seed = seed or rd.randint(0, 2**32 - 1)
         rd.seed(seed)
         np.random.seed(seed-1)
-        
+
         synthetic = (num_people is not None and num_sites is not None and mob_rate_per_type is not None and
                     dur_mean is not None and num_age_groups is not None)
 
@@ -330,31 +330,31 @@ class MobilitySimulator:
             self.num_people = num_people
             # Random geographical assignment of people's home on 2D grid
             self.home_loc = np.random.uniform(0.0, 1.0, size=(self.num_people, 2))
-            
+
             # Age-group of individuals
             self.people_age = np.random.randint(low=0, high=self.num_age_groups,
                                                 size=self.num_people, dtype=int)
             self.people_household = None
             self.households = None
-            
+
             self.num_sites = num_sites
             # Random geographical assignment of sites on 2D grid
             self.site_loc = np.random.uniform(0.0, 1.0, size=(self.num_sites, 2))
-            
+
             # common mobility rate for all age groups
             self.mob_rate_per_age_per_type = np.tile(mob_rate_per_type,(num_age_groups,1))
             self.num_age_groups = num_age_groups
             self.num_site_types = len(mob_rate_per_type)
             # common duration for all types
             self.dur_mean_per_type = np.array(self.num_site_types*[dur_mean])
-            
+
             # Random type for each site
             site_type_prob = np.ones(self.num_site_types)/self.num_site_types
             self.site_type = np.random.multinomial(
                 n=1, pvals=site_type_prob, size=self.num_sites).argmax(axis=1)
-            
+
             self.variety_per_type = None
-            
+
             self.home_tile=None
             self.tile_site_dist=None
 
@@ -366,10 +366,10 @@ class MobilitySimulator:
             self.home_loc = np.array(home_loc)
 
             self.people_age = np.array(people_age)
-            
+
             if people_household is not None:
                 self.people_household = np.array(people_household)
-            
+
                 # create dict of households, to retreive household members in O(1) during household infections
                 self.households = {}
                 for i in range(self.num_people):
@@ -388,7 +388,7 @@ class MobilitySimulator:
             self.num_age_groups = self.mob_rate_per_age_per_type.shape[0]
             self.num_site_types = self.mob_rate_per_age_per_type.shape[1]
             self.dur_mean_per_type = np.array(dur_mean_per_type)
-            
+
             self.site_type = np.array(site_type)
 
             self.variety_per_type=np.array(variety_per_type)
@@ -488,7 +488,7 @@ class MobilitySimulator:
                 seed=rd.randint(0, 2**32 - 1)
                 )
 
-        # Group mobility traces per indiv 
+        # Group mobility traces per indiv
         self.mob_traces = self._group_mob_traces(all_mob_traces)
         return all_mob_traces
 
@@ -536,7 +536,7 @@ class MobilitySimulator:
     def _find_mob_trace_overlaps(self, sites, mob_traces_at_site, infector_mob_traces_at_site, tmin, for_all_individuals):
 
         # decide way of storing depending on way the function is used (all or individual)
-        # FIXME: this could be done in a cleaner way by calling this function several times in `_find_contacts` 
+        # FIXME: this could be done in a cleaner way by calling this function several times in `_find_contacts`
         if for_all_individuals:
             # dict of dict of list of contacts:
             # i.e. contacts[i][j][k] = "k-th contact from i to j"
@@ -561,12 +561,12 @@ class MobilitySimulator:
             # Iterate over each visit of the infector at site s
             for v_inf in infector_mob_traces_at_site[s]:
 
-                # Skip if delta-contact ends before `tmin` 
+                # Skip if delta-contact ends before `tmin`
                 if v_inf.t_to_shifted > tmin:
-                    
+
                     v_time = (v_inf.t_from, v_inf.t_to_shifted)
 
-                    # Find any othe person that had overlap with this visit 
+                    # Find any othe person that had overlap with this visit
                     for v in list(inter.find(other=v_time)):
 
                         # Ignore contacts with same individual
@@ -579,7 +579,7 @@ class MobilitySimulator:
                         if c_t_to > c_t_from and c_t_to > tmin:
 
                             # Init contact tuple
-                            # Note 1: Contact always considers delta overlap for `indiv_j` 
+                            # Note 1: Contact always considers delta overlap for `indiv_j`
                             # (i.e. for `indiv_j` being the infector)
                             # Note 2: Contact contains the delta-extended visit of `indiv_j`
                             # (i.e. there is a `Contact` even when `indiv_j` never overlapped physically with `indiv_i`)
@@ -657,6 +657,8 @@ class MobilitySimulator:
             # Initialize empty contact array
             self.contacts = {i: defaultdict(InterLap) for i in range(self.num_people)}
 
+        return all_mob_traces
+
 
     def list_intervals_in_window_individual_at_site(self, *, indiv, site, t0, t1):
         """Return a generator of Intervals of all visits of `indiv` is at site
@@ -664,8 +666,8 @@ class MobilitySimulator:
         """
         for visit in self.mob_traces[indiv].find((t0, t1)):
             # the above call matches all on (`t_from`, `t_to_shifted`)
-            # thus need to filter out visits that ended before `t0`, 
-            # i.e. visits such that `t_to` <= `t0`, 
+            # thus need to filter out visits that ended before `t0`,
+            # i.e. visits such that `t_to` <= `t0`,
             # i.e. environmental match only (match only occured on (`t_to`, `t_to_shifted`))
 
             if visit.t_to > t0 and visit.site == site:

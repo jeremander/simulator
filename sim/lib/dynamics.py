@@ -1,21 +1,15 @@
-
+from collections import namedtuple
 import time
-import bisect
 import numpy as np
-import pandas as pd
-import networkx as nx
-import scipy
-import scipy.optimize
-import scipy as sp
-import os, math
-import matplotlib.pyplot as plt
-from joblib import Parallel, delayed
+import math
 
 from lib.priorityqueue import PriorityQueue
 from lib.measures import (MeasureList, BetaMultiplierMeasure,
     SocialDistancingForAllMeasure, BetaMultiplierMeasureByType,
-    SocialDistancingForPositiveMeasure, SocialDistancingByAgeMeasure, 
+    SocialDistancingForPositiveMeasure, SocialDistancingByAgeMeasure,
     SocialDistancingForSmartTracing, ComplianceForAllMeasure, SocialDistancingForKGroups)
+
+TestResult = namedtuple('TestResult', ['time', 'person', 'result'])
 
 class DiseaseModel(object):
     """
@@ -55,16 +49,16 @@ class DiseaseModel(object):
         self.n_people = mob.num_people
         self.n_sites = mob.num_sites
         self.max_time = mob.max_time
-        
-        # special state variables from mob object 
+
+        # special state variables from mob object
         self.people_age = mob.people_age
         self.num_age_groups = mob.num_age_groups
         self.site_type = mob.site_type
         self.num_site_types = mob.num_site_types
-        
+
         self.people_household = mob.people_household
         self.households = mob.households
-            
+
         assert(self.num_age_groups == self.fatality_rates_by_age.shape[0])
         assert(self.num_age_groups == self.p_hospital_by_age.shape[0])
 
@@ -83,7 +77,7 @@ class DiseaseModel(object):
             print('\r', self._PRINT_MSG.format(t=t, maxt=self.max_time, maxd=self.max_time / 24),
                   sep='', end='', flush=True)
             self.last_print = time.time()
-    
+
 
     def __init_run(self):
         """
@@ -160,7 +154,7 @@ class DiseaseModel(object):
             'resi': np.inf * np.ones(self.n_people, dtype='float'),
             'dead': np.inf * np.ones(self.n_people, dtype='float'),
             'hosp': np.inf * np.ones(self.n_people, dtype='float'),
-        }   
+        }
         self.outcome_of_test = np.zeros(self.n_people, dtype='bool')
 
         # infector of i
@@ -170,7 +164,7 @@ class DiseaseModel(object):
         self.children_count_iasy = np.zeros(self.n_people, dtype='int')
         self.children_count_ipre = np.zeros(self.n_people, dtype='int')
         self.children_count_isym = np.zeros(self.n_people, dtype='int')
-        
+
         # smart tracing
         self.empirical_survival_probability = np.ones(self.n_people, dtype='float')
 
@@ -183,7 +177,7 @@ class DiseaseModel(object):
             for i in seeds_:
                 assert(self.was_initial_seed[i] == False)
                 self.was_initial_seed[i] = True
-                
+
                 # inital exposed
                 if state == 'expo':
                     self.__process_exposure_event(0.0, i, None)
@@ -289,12 +283,13 @@ class DiseaseModel(object):
 
         """
         self.verbose = verbose
+        self.test_log = []
 
         # optimized params
         self.betas = params['betas']
         self.alpha = self.d.alpha
         self.mu = self.d.mu
-        
+
         # household param
         if 'beta_household' in params:
             self.beta_household = params['beta_household']
@@ -305,17 +300,17 @@ class DiseaseModel(object):
         self.testing_frequency  = testing_params['testing_frequency']
         self.test_targets       = testing_params['test_targets']
         self.test_queue_policy  = testing_params['test_queue_policy']
-        self.test_reporting_lag = testing_params['test_reporting_lag']        
+        self.test_reporting_lag = testing_params['test_reporting_lag']
         self.tests_per_batch    = testing_params['tests_per_batch']
         self.testing_t_window   = testing_params['testing_t_window']
-        
+
         # smart tracing
         self.smart_tracing       = testing_params['smart_tracing']
         self.test_smart_action   = testing_params['test_smart_action']
         self.test_smart_delta    = testing_params['test_smart_delta']
         self.test_smart_num_contacts   = testing_params['test_smart_num_contacts']
         self.test_smart_duration = testing_params['test_smart_duration']
-        
+
         # Set list of measures
         if not isinstance(measure_list, MeasureList):
             raise ValueError("`measure_list` must be a `MeasureList` object")
@@ -333,13 +328,13 @@ class DiseaseModel(object):
         self.measure_list.init_run(SocialDistancingByAgeMeasure,
                                    num_age_groups=self.num_age_groups,
                                    n_visits=max(self.mob.visit_counts))
-        
+
         self.measure_list.init_run(ComplianceForAllMeasure,
                                    n_people=self.n_people)
-        
+
         self.measure_list.init_run(SocialDistancingForSmartTracing,
                                    n_people=self.n_people,
-                                   n_visits=max(self.mob.visit_counts))    
+                                   n_visits=max(self.mob.visit_counts))
 
         self.measure_list.init_run(SocialDistancingForKGroups)
 
@@ -353,7 +348,7 @@ class DiseaseModel(object):
         self.initial_seeds = dict()
         for k, v in initial_counts.items():
             self.initial_seeds[k] = initial_people[ptr:ptr + v].tolist()
-            ptr += v                    
+            ptr += v
 
         ### sample all iid events ahead of time in batch
         batch_size = (self.n_people, )
@@ -368,7 +363,7 @@ class DiseaseModel(object):
         self.bernoulli_is_iasy = np.random.binomial(1, self.alpha, size=batch_size)
         self.bernoulli_is_fatal = self.d.sample_is_fatal(self.people_age, size=batch_size)
         self.bernoulli_is_hospi = self.d.sample_is_hospitalized(self.people_age, size=batch_size)
-            
+
 
         # initial seed
         self.initialize_states_for_seeds()
@@ -423,10 +418,10 @@ class DiseaseModel(object):
 
                 # household exposure
                 if (infector is not None) and i_susceptible and k == -1:
-                    
+
                     # 1) check whether infector recovered or dead
                     infector_recovered = \
-                        (self.state['resi'][infector] or 
+                        (self.state['resi'][infector] or
                             self.state['dead'][infector])
 
                     # 2) check whether infector got hospitalized
@@ -467,18 +462,18 @@ class DiseaseModel(object):
 
                         mu_infector = self.mu if self.state['iasy'][infector] else 1.0
                         self.__push_household_exposure_infector_to_j(
-                            t=t, infector=infector, j=i, base_rate=mu_infector) 
+                            t=t, infector=infector, j=i, base_rate=mu_infector)
 
                 # contact exposure
                 if (infector is not None) and i_susceptible and k >= 0:
-                    
+
                     is_in_contact, contact = self.mob.is_in_contact(indiv_i=i, indiv_j=infector, site=k, t=t)
                     assert(is_in_contact and (k is not None))
                     i_visit_id, infector_visit_id = contact.id_tup
 
                     # 1) check whether infector recovered or dead
                     infector_recovered = \
-                        (self.state['resi'][infector] or 
+                        (self.state['resi'][infector] or
                             self.state['dead'][infector])
 
                     # 2) check whether infector stayed at home due to measures
@@ -486,12 +481,12 @@ class DiseaseModel(object):
                     infector_contained = self.is_person_home_from_visit_due_to_measure(
                         t=t, i=infector, visit_id=infector_visit_id) \
                         or self.state['hosp'][infector]
-                                            
+
                     # 3) check whether susceptible stayed at home due to measures
                     i_contained = self.is_person_home_from_visit_due_to_measure(
-                        t=t, i=i, visit_id=i_visit_id)  
+                        t=t, i=i, visit_id=i_visit_id)
 
-                    # 4) check whether infectiousness got reduced due to site specific 
+                    # 4) check whether infectiousness got reduced due to site specific
                     #    measures and as a consequence this event didn't occur
                     rejection_prob = self.reject_exposure_due_to_measure(t=t, k=k)
                     site_avoided_infection =  (np.random.uniform() < rejection_prob)
@@ -504,13 +499,13 @@ class DiseaseModel(object):
 
                         self.__process_exposure_event(t, i, infector)
 
-                    # if any of 2), 3), 4) were true, an infection could happen 
-                    # at a later point, hence sample a new event 
+                    # if any of 2), 3), 4) were true, an infection could happen
+                    # at a later point, hence sample a new event
                     if (infector_contained or i_contained or site_avoided_infection):
 
                         mu_infector = self.mu if self.state['iasy'][infector] else 1.0
                         self.__push_contact_exposure_infector_to_j(
-                            t=t, infector=infector, j=i, base_rate=mu_infector)                    
+                            t=t, infector=infector, j=i, base_rate=mu_infector)
 
             elif event == 'ipre':
                 self.__process_presymptomatic_event(t, i)
@@ -531,9 +526,9 @@ class DiseaseModel(object):
                 self.__process_fatal_event(t, i)
 
             elif event == 'hosp':
-                # cannot get hospitalization if not ill anymore 
+                # cannot get hospitalization if not ill anymore
                 valid_hospitalization = \
-                    ((not self.state['resi'][i]) and 
+                    ((not self.state['resi'][i]) and
                         (not self.state['dead'][i]))
 
                 if valid_hospitalization:
@@ -602,7 +597,7 @@ class DiseaseModel(object):
 
         # contact exposure of others
         self.__push_contact_exposure_events(t, i, 1.0)
-        
+
         # household exposures
         if self.households is not None and self.beta_household > 0:
             self.__push_household_exposure_events(t, i, 1.0)
@@ -660,7 +655,7 @@ class DiseaseModel(object):
 
         # contact exposure of others
         self.__push_contact_exposure_events(t, i, self.mu)
-        
+
         # household exposures
         if self.households is not None and self.beta_household > 0:
             self.__push_household_exposure_events(t, i, self.mu)
@@ -674,7 +669,7 @@ class DiseaseModel(object):
         assert(self.state['iasy'][i] != self.state['isym'][i]) # XOR
         self.state['resi'][i] = True
         self.state_started_at['resi'][i] = t
-        
+
         # infection type
         if self.state['iasy'][i]:
             self.state['iasy'][i] = False
@@ -708,7 +703,7 @@ class DiseaseModel(object):
         if self.state['hosp'][i]:
             self.state['hosp'][i] = False
             self.state_ended_at['hosp'][i] = t
-    
+
     def __process_hosp_event(self, t, i):
         """
         Mark person `i` as hospitalized at time `t`
@@ -718,7 +713,7 @@ class DiseaseModel(object):
         assert(self.state['isym'][i])
         self.state['hosp'][i] = True
         self.state_started_at['hosp'][i] = t
-    
+
 
     def __kernel_term(self, a, b, T):
         '''Computes
@@ -749,7 +744,7 @@ class DiseaseModel(object):
             # compute all delta-contacts of `infector` with any other individual
             infectors_contacts = self.mob.find_contacts_of_indiv(indiv=infector, tmin=t)
 
-            # iterate over contacts and store contact of with each individual `indiv_i` that is still susceptible 
+            # iterate over contacts and store contact of with each individual `indiv_i` that is still susceptible
             valid_contacts = set()
             for contact in infectors_contacts:
                 if self.state['susc'][contact.indiv_i]:
@@ -765,7 +760,7 @@ class DiseaseModel(object):
     def __push_contact_exposure_infector_to_j(self, t, infector, j, base_rate):
         """
         Pushes the next exposure event that person `infector` causes for person `j`
-        using `base_rate` as basic infectivity of person `i` 
+        using `base_rate` as basic infectivity of person `i`
         (equivalent to `\mu` in model definition)
         """
         tau = t
@@ -774,17 +769,17 @@ class DiseaseModel(object):
 
         # sample next arrival from non-homogeneous point process
         while self.mob.will_be_in_contact(indiv_i=j, indiv_j=infector, t=tau, site=None) and not sampled_event:
-            
+
             # check if j could get infected from infector at current `tau`
             # i.e. there is `delta`-contact from infector to j (i.e. non-zero intensity)
             has_infectious_contact, contact = self.mob.is_in_contact(indiv_i=j, indiv_j=infector, t=tau, site=None)
 
             # if yes: do nothing
             if has_infectious_contact:
-                pass 
+                pass
 
-            # if no:       
-            else: 
+            # if no:
+            else:
                 # directly jump to next contact start of a `delta`-contact (memoryless property)
                 next_contact = self.mob.next_contact(indiv_i=j, indiv_j=infector, t=tau, site=None)
 
@@ -801,7 +796,7 @@ class DiseaseModel(object):
             # 1) reject w.p. 1 if there is no more infectious contact at the new time (lambda(tau) = 0)
             if not sampled_at_infectious_contact:
                 continue
-            
+
             # 2) compute infectiousness integral in lambda(tau)
             # a. query times that infector was in [tau - delta, tau] at current site `site`
             site = sampled_at_contact.site
@@ -814,7 +809,7 @@ class DiseaseModel(object):
             beta_k = self.betas[self.site_type[site]]
             p = (beta_k * base_rate * sum([self.__kernel_term(v[0], v[1], tau) for v in intersections])) \
                 / lambda_max
-            
+
             assert(p <= 1 + 1e-8 and p >= 0)
 
             # accept w.prob. lambda(t) / lambda_max
@@ -845,7 +840,7 @@ class DiseaseModel(object):
     def __push_household_exposure_infector_to_j(self, t, infector, j, base_rate):
         """
         Pushes the next exposure event that person `infector` causes for person `j`,
-        who lives in the same household, using `base_rate` as basic infectivity of 
+        who lives in the same household, using `base_rate` as basic infectivity of
         person `i` (equivalent to `\mu` in model definition)
         """
         tau = t
@@ -887,7 +882,7 @@ class DiseaseModel(object):
         # return rejection prob
         rejection_prob = 1.0 - acceptance_prob
         return rejection_prob
-    
+
     def is_person_home_from_visit_due_to_measure(self, t, i, visit_id):
         '''
         Returns True/False of whether person i stayed at home from visit
@@ -897,19 +892,19 @@ class DiseaseModel(object):
         is_home = (
             self.measure_list.is_contained(
                 SocialDistancingForAllMeasure, t=t,
-                j=i, j_visit_id=visit_id) or 
+                j=i, j_visit_id=visit_id) or
             self.measure_list.is_contained(
                 SocialDistancingForPositiveMeasure, t=t,
-                j=i, j_visit_id=visit_id, state_posi=self.state['posi'], state_resi=self.state['resi'], state_dead=self.state['dead']) or 
+                j=i, j_visit_id=visit_id, state_posi=self.state['posi'], state_resi=self.state['resi'], state_dead=self.state['dead']) or
             self.measure_list.is_contained(
                 SocialDistancingByAgeMeasure, t=t,
                 age=self.people_age[i], j_visit_id=visit_id) or
             self.measure_list.is_contained(
                 SocialDistancingForSmartTracing, t=t,
-                j=i, j_visit_id=visit_id) or 
+                j=i, j_visit_id=visit_id) or
             self.measure_list.is_contained(
                 SocialDistancingForKGroups, t=t,
-                j=i)            
+                j=i)
         )
         return is_home
 
@@ -939,41 +934,42 @@ class DiseaseModel(object):
             i = self.testing_queue.pop()
             self.queue.push((t + self.test_reporting_lag, 'test',
                                 i, None, None), priority=t + self.test_reporting_lag)
-            
+
             # update test result preemptively, to account for the state at the time of testing
             if self.state['expo'][i] or self.state['ipre'][i] or self.state['isym'][i] or self.state['iasy'][i]:
                 self.outcome_of_test[i] = True
             else:
                 self.outcome_of_test[i] = False
+            self.test_log.append(TestResult(t, i, self.outcome_of_test[i]))
 
     def __process_testing_event(self, t, i):
         """
         Test person `i` at time `t`
         """
-        
+
         # update test result preemptively, to account for the state at the time of testing
-        if self.outcome_of_test[i]: 
+        if self.outcome_of_test[i]:
             self.state['posi'][i] = True
             self.state_started_at['posi'][i] = t
-                
+
             if self.state['nega'][i]:
                 self.state['nega'][i] = False
                 self.state_ended_at['nega'][i] = self.state_started_at['posi'][i]
         else:
             self.state['nega'][i] = True
             self.state_started_at['nega'][i] = t
-            
+
         # smart tracing
         # if i is not compliant, skip
         is_i_not_compliant = self.measure_list.is_contained(
             ComplianceForAllMeasure, t=t-self.test_smart_delta, j=i)
-            
+
         if is_i_not_compliant:
             return
-        
+
         if self.state['posi'][i] and (self.smart_tracing != None):
             self.__update_smart_tracing(t, i)
-    
+
     def __update_smart_tracing(self, t, i):
         '''
         Updates smart tracing policy for individual `i` at time `t`.
@@ -1001,17 +997,17 @@ class DiseaseModel(object):
                     valid_contacts.add(contact.indiv_i)
 
         contacts = PriorityQueue()
-        
+
         for j in valid_contacts:
             # if j is not compliant, skip
             is_j_not_compliant = self.measure_list.is_contained(
                 ComplianceForAllMeasure, t=t-self.test_smart_delta, j=j)
-            
+
             if is_j_not_compliant:
                 continue
 
             valid_contact, s = self.__compute_empirical_survival_probability(t, i, j)
-            
+
             if valid_contact:
                 self.empirical_survival_probability[j] = s
                 if self.smart_tracing == 'basic':
@@ -1020,7 +1016,7 @@ class DiseaseModel(object):
                     contacts.push(j, priority=self.empirical_survival_probability[j])
                 else:
                     raise ValueError('Invalid smart tracing policy.')
-        
+
         # quarantine nodes for a 'self.test_smart_duration'
         max_contacts = len(contacts)
         for j in range(min(self.test_smart_num_contacts, max_contacts)):
@@ -1029,13 +1025,13 @@ class DiseaseModel(object):
                 self.measure_list.start_containment(SocialDistancingForSmartTracing, t=t, j=contact)
             if self.test_smart_action == 'test':
                 self.__apply_for_testing(t, contact)
-    
+
     # compute empirical survival probability of individual j due to node i at time t
     def __compute_empirical_survival_probability(self, t, i, j):
         s = 0
         valid_contact = False
-            
-        next_contact_obj = self.mob.next_contact(indiv_i=j, indiv_j=i, t=t - self.test_smart_delta, site=None)      
+
+        next_contact_obj = self.mob.next_contact(indiv_i=j, indiv_j=i, t=t - self.test_smart_delta, site=None)
         while next_contact_obj is not None:
 
             start_next_contact = next_contact_obj.t_from
@@ -1048,25 +1044,25 @@ class DiseaseModel(object):
             is_in_contact, contact = self.mob.is_in_contact(indiv_i=j, indiv_j=i, site=None, t=start_next_contact)
             assert(is_in_contact)
             j_visit_id, i_visit_id = contact.id_tup
-                    
+
             # Check SocialDistancing measures
-            is_j_contained = self.is_person_home_from_visit_due_to_measure(t=start_next_contact, i=j, visit_id=j_visit_id)  
+            is_j_contained = self.is_person_home_from_visit_due_to_measure(t=start_next_contact, i=j, visit_id=j_visit_id)
             is_i_contained = self.is_person_home_from_visit_due_to_measure(t=start_next_contact, i=i, visit_id=i_visit_id)
-                
+
             # check hospitalization
             is_i_contained = is_i_contained or (
                 self.state['hosp'][i] and self.state_started_at['hosp'][i] < start_next_contact)
-                    
+
             # BetaMultiplier measures
             site = contact.site
             beta_fact = 1.0
 
             beta_mult_measure = self.measure_list.find(BetaMultiplierMeasure, t=start_next_contact)
             beta_fact *= beta_mult_measure.beta_factor(k=site, t=start_next_contact) if beta_mult_measure else 1.0
-            
+
             beta_mult_measure = self.measure_list.find(BetaMultiplierMeasureByType, t=start_next_contact)
-            beta_fact *= beta_mult_measure.beta_factor(typ=self.site_type[site], t=start_next_contact) if beta_mult_measure else 1.0 
-                
+            beta_fact *= beta_mult_measure.beta_factor(typ=self.site_type[site], t=start_next_contact) if beta_mult_measure else 1.0
+
             # decide if i and j really had overlap
             if (not is_j_contained) and (not is_i_contained):
                 if self.smart_tracing == 'basic':
@@ -1075,10 +1071,10 @@ class DiseaseModel(object):
                 elif self.smart_tracing == 'advanced':
                     s += (min(end_next_contact, t) - start_next_contact) * self.betas[self.site_type[site]] * beta_fact
                     valid_contact = True
-                
+
             # get next contact (if it exists)
             next_contact_obj = self.mob.next_contact(indiv_i=j, indiv_j=i, t=end_next_contact + self.delta, site=None)
-        
+
         s = np.exp(-s)
-        
+
         return valid_contact, s

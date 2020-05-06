@@ -4,10 +4,14 @@
 import argparse
 from datetime import datetime
 import json
+import numpy as np
 from pathlib import Path
 import pickle
 import random
 
+from lib.distributions import CovidDistributions
+from lib.dynamics import DiseaseModel
+from lib.measures import Interval, MeasureList, SocialDistancingForPositiveMeasure
 from lib.mobilitysim import MobilitySimulator
 
 
@@ -18,11 +22,6 @@ def get_site_types():
 site_dict = get_site_types()
 # default site types:
 # site_dict = {0: 'education', 1: 'social', 2: 'bus_stop', 3: 'office', 4: 'supermarket'}
-
-age_ranges = [(0, 4), (5, 14), (15, 34), (35, 59), (60, 79), (80, 100)]
-
-def rand_age_in_category(cat):
-    return random.randint(*age_ranges[cat])
 
 
 if __name__ == '__main__':
@@ -40,14 +39,23 @@ if __name__ == '__main__':
 
     # load settings
     with open(args.settings, 'rb') as f:
-        kwargs = pickle.load(f)
+        settings = pickle.load(f)
 
-    mob = MobilitySimulator(**kwargs)
+    disease_settings = settings['disease']
+    age_ranges = disease_settings['age_ranges']
+
+    def rand_age_in_category(cat):
+        return random.randint(*age_ranges[cat])
+
+    # simulate mobility
+    mob = MobilitySimulator(**settings['mobility'])
     mob.verbose = True
 
-    # perform simulation
-    print(f'Simulating mobility for {mob.num_people} people, {mob.num_sites} sites, {args.max_time} hours...')
-    traces = mob._simulate_mobility(max_time=args.max_time, seed=args.seed)
+    print(f'{mob.num_people} people, {mob.num_sites} sites, {args.max_time} hours')
+
+    print(f'Simulating mobility...')
+    mob.simulate(max_time=args.max_time, seed=args.seed)
+    traces = mob.all_mob_traces
     visits = [{'person': v.indiv, 'site': v.site, 'time': v.t_from, 'dur' : v.duration} for v in traces]
     num_visits = len(visits)
     print(f'{num_visits} visits occurred.')
@@ -60,6 +68,24 @@ if __name__ == '__main__':
     assert len(people) == mob.num_people
     assert len(sites) == mob.num_sites
 
+    # simulate disease transmission
+    fatality_rates_by_age = np.array(disease_settings['fatality_rates_by_age'])
+    distributions = CovidDistributions(fatality_rates_by_age=fatality_rates_by_age)
+    testing_params = disease_settings['testing_params']
+    testing_params['testing_t_window'] = [0.0, args.max_time]
+    # standard measure of positives staying isolated
+    measure_list = MeasureList([SocialDistancingForPositiveMeasure(t_window=Interval(0.0, args.max_time), p_stay_home=1.0)])
+
+    print('Simulating disease...')
+    sim = DiseaseModel(mob, distributions)
+    sim.launch_epidemic(
+        params=disease_settings['model_params'],
+        initial_counts=disease_settings['initial_seeds'],
+        testing_params=testing_params,
+        measure_list=measure_list,
+        verbose=False)
+    tests = [{'person': test.person, 'time': test.time, 'result': int(test.result)} for test in sim.test_log]
+
     # save data to JSON
     data = {
         'sim_time': now.isoformat(),
@@ -71,7 +97,8 @@ if __name__ == '__main__':
         'site_types': site_dict,
         'people': people,
         'sites': sites,
-        'visits': visits
+        'visits': visits,
+        'tests': tests
     }
 
     print(f'Saving data to {args.output_file}')
